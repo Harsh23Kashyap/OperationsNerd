@@ -37,7 +37,7 @@ with d.get_conn() as conn:
                           {"first_name": "Test", "last_name": "Employee",
                            "email": "t.employee@example.test", "role": "Analyst",
                            "department": "Ops", "manager": "Test Manager",
-                           "start_date": "2026-01-12", "pto_balance_days": 12})
+                           "start_date": "2026-01-12"})
     cand = d.create_entity(conn, biz_a, "crm_candidate",
                            {"name": "Test Candidate", "email": "candidate@example.test",
                             "role_applied": "Coordinator", "stage": "applied"})
