@@ -552,9 +552,9 @@ def release_from_restriction(conn, idempotency_key: str, from_fund_id: int, amou
         if from_fund["restriction_type"] == "unrestricted":
             raise InvalidState(f"fund {from_fund_id} is unrestricted; only a restricted fund can be released from")
         if from_fund["restriction_type"] == "permanently_restricted":
-            # TODO: donor-specific permanent-release exceptions require a separately
-            # agreed rule. Do not reuse temporary purpose-release semantics.
-            raise InvalidState("permanent fund release rules are not configured")
+            # Permanent funds remain restricted by default. No application-level
+            # override is exposed; any deliberate programmer change is separate.
+            raise InvalidState("permanent funds must remain restricted")
         if not from_fund["is_active"]:
             raise InvalidState(f"fund {from_fund_id} is not active")
         to_fund = default_fund_id(conn)

@@ -497,7 +497,8 @@ asset purchases cannot be distinguished from cash transfers by this schema.
 
 Temporary releases debit restricted net assets and credit unrestricted net
 assets using per-fund balanced liability-clearing lines. Equity clearing is
-refused because its credit would cancel the restricted equity debit in capacity. Permanent releases now fail
-closed instead of borrowing temporary-purpose rules. **TODO: agree and implement
-the separate permanent-fund release policy, including any permitted exceptions.**
-No permanent-release exception is assumed here.
+refused because its credit would cancel the restricted equity debit in capacity.
+Permanent funds always remain restricted by default. The release command refuses
+them instead of borrowing temporary-purpose rules. No application-level override
+or permanent-release exception is provided. A deliberate programmer change is
+separate from the normal release workflow.

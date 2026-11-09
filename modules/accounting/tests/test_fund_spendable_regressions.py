@@ -64,7 +64,7 @@ def test_release_replay_no_second_reduction():
 def test_release_after_capital_cannot_exceed_available():
  c,f,b,k,u,r,l,e=setup();post(c,f,k,b,8000);rejects(lambda:release(c,f,u,r,l,3000));assert available(c,f)==2000
 
-def test_permanent_release_fail_closed_pending_rule():
+def test_permanent_release_remains_restricted_by_default():
  c,f,b,k,u,r,l,e=setup('permanently_restricted');rejects(lambda:release(c,f,u,r,l));assert available(c,f)==10000
 
 def test_designation_cannot_reclassify_posted_asset():
