@@ -14,7 +14,7 @@ from test_fund_spendable_regressions import setup
 
 class ControlsTests(unittest.TestCase):
     def setUp(self):
-        self.c,self.f,self.bank,self.cap,self.u,self.r,self.clear,self.exp = setup()
+        self.c,self.f,self.bank,self.cap,self.u,self.r,self.clear,self.exp = setup(mapped=False)
         self.income = a.account_by_code(self.c,'4000')['account_id']
         self.other = a.add_account(self.c,'otherasset','1700','Other asset','asset')['account_id']
         self.n = 0
@@ -66,11 +66,11 @@ class ControlsTests(unittest.TestCase):
         self.mapping();self.post(self.other,self.bank,8000,'2026-03-01')
         self.post(self.bank,self.income,10000,'2026-04-01')
         self.reject_atomic(lambda:self.post(self.other,self.bank,8000))
-    def test_same_date_cash_is_netted_not_entry_order(self):
+    def test_same_date_cash_prefix_is_not_hidden_by_later_receipt(self):
         self.mapping();self.post(self.other,self.bank,8000,'2026-03-01')
         self.post(self.bank,self.income,8000,'2026-03-01')
-        self.post(self.other,self.bank,8000)
-        self.assertEqual(a._fund_cash_balance(self.c,self.f,'2026-12-31'),2000)
+        self.reject_atomic(lambda:self.post(self.other,self.bank,8000))
+        self.assertEqual(a._fund_cash_balance(self.c,self.f,'2026-12-31'),10000)
     def test_capacity_suspension_does_not_disable_cash(self):
         self.mapping();self.change('capacity',False)
         self.reject_atomic(lambda:self.post(self.exp,self.bank,10001))
@@ -87,7 +87,7 @@ class ControlsTests(unittest.TestCase):
         self.mapping();self.change('cash',False);self.post(self.other,self.bank,12000)
         self.reject_atomic(lambda:self.change('cash',True))
     def test_cannot_reinstate_capacity_while_still_negative(self):
-        self.change('capacity',False);self.post(self.exp,self.bank,12000)
+        self.mapping();self.change('cash',False);self.change('capacity',False);self.post(self.exp,self.bank,12000)
         self.reject_atomic(lambda:self.change('capacity',True))
     def test_reinstate_after_repair_keeps_exception_history(self):
         self.mapping();self.change('cash',False);self.change('capacity',False)
@@ -121,11 +121,12 @@ class ControlsTests(unittest.TestCase):
         for aid in [ar,self.cap,self.exp]:
             self.reject_atomic(lambda:self.mapping([aid],key='bad'+str(aid)))
     def test_historical_negative_cash_requires_explicit_review(self):
-        self.post(self.other,self.bank,12000)
-        self.reject_atomic(lambda:self.mapping())
-        self.assertFalse(a.fund_controls(self.c,self.f)['cash_configured'])
-        self.change('cash',False);self.mapping()
+        # Existing historical data can predate these controls; insert via an
+        # explicit suspended period, then inspect mapping under that exception.
+        self.change('cash',False);self.post(self.other,self.bank,12000)
+        self.mapping()
         self.assertTrue(a.fund_controls(self.c,self.f)['cash_configured'])
+        self.reject_atomic(lambda:self.change('cash',True))
     def test_reinstate_checks_future_deficits_too(self):
         self.mapping();self.change('cash',False)
         self.post(self.other,self.bank,12000,'2027-01-01')
@@ -142,7 +143,7 @@ class ControlsTests(unittest.TestCase):
         self.assertEqual(len([r for r in self.audit() if r['event']=='configure_cash']),1)
 
     def test_suspended_capacity_applies_to_release_precheck(self):
-        self.change('capacity',False)
+        self.mapping();self.change('capacity',False)
         entry=a.release_from_restriction(self.c,'release',self.f,12000,'2026-02-01','Purpose met',self.r,self.u,self.clear)
         self.assertEqual(a.fund(self.c,self.f,as_of='2026-12-31')['available_cents'],-2000)
         self.assertTrue(any(r['journal_entry_id']==entry['entry_id'] for r in self.audit()))

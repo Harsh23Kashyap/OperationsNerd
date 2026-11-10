@@ -538,16 +538,25 @@ For the same tests against an older source checkout:
 ACCOUNTING_SOURCE_ROOT=/path/to/older/checkout python modules/accounting/tests/test_fund_timeline_regressions.py
 ```
 
-### Restricted-capacity timeline boundary
+### Restricted-fund posting boundary
 
-The guard checks the proposed entry's net capacity reduction on its accounting
-date and on every later posted accounting date. Existing movements are netted
-by date, not ordered by journal-entry ID within a day. A receipt and an expense
-on the same date can therefore offset each other when evaluating an earlier
-backdated entry. This is an end-of-date capacity check, not an intraday cash or
-commitment guarantee. Entry IDs do not establish an agreed intraday accounting
-order. A stricter rule needs that ordering policy before implementation.
+The guard checks the proposed entry's reduction at its posting position and
+at every affected later saved posting, ordered by accounting date and then
+immutable journal-entry ID. New backdated entries append after saved entries
+on their date. A later receipt on the same date cannot hide an earlier
+negative prefix. Employees control saved order by posting receipts before
+spending. This records accounting postings, not proof that a bank check cleared,
+and there is no employee resequencing UI.
 
-The guard does not rewrite earlier release entries, infer capital designations
-for unmapped asset accounts, or repair existing deficits. Permanent funds remain
-restricted by default. The code alone is not approval to use this on real books.
+Restricted-fund asset outflows and net capacity-reducing commitments require
+an explicit reviewed bank/cash mapping. Unmapped spending fails closed unless
+the cash check has been explicitly suspended with an actor, reason and audit.
+Receipts remain possible for setup and repair. Unrestricted behavior is
+unchanged. Cash and capacity checks are independent, so suspending one does
+not silently disable the other.
+
+The guard does not rewrite historical exceptions, infer capital or cash
+classifications, or repair existing deficits. Permanent donor rules and ledger
+invariants stay in place. The local suspension commands are not authenticated
+admin access, have no HTTP route, and are not ready for production use. See
+`documentation/FUND_CONSTRAINT_CONTROLS.md` for audit, mapping and login limits.

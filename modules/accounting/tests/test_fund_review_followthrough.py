@@ -1,4 +1,4 @@
-"""Date-net contract and review regressions, disposable SQLite/real HTTP only."""
+"""Saved posting-order contract and review regressions, disposable SQLite/real HTTP only."""
 import os
 from pathlib import Path
 import sys
@@ -31,10 +31,11 @@ class ReviewFollowthrough(timeline.TimelineTests):
   self.spend('2026-03-01',6000);self.reject_atomic(lambda:self.spend('2026-03-01',4001));self.assertEqual(self.balance(),4000)
  def test_same_day_two_expenses_exact(self):
   self.spend('2026-03-01',6000);self.spend('2026-03-01',4000);self.assertEqual(self.balance(),0)
- def test_same_date_net_policy_receipt_after_spend(self):
-  self.spend('2026-03-01',8000);self.post('2026-03-01',self.bank,self.inc,8000);self.spend('2026-02-01',8000)
-  self.assertEqual(self.balance('2026-02-01'),2000);self.assertEqual(self.balance('2026-03-01'),2000)
- def test_same_date_net_policy_receipt_before_spend(self):
+ def test_saved_order_receipt_after_spend_rejects_backdate(self):
+  self.spend('2026-03-01',8000);self.post('2026-03-01',self.bank,self.inc,8000)
+  self.reject_atomic(lambda:self.spend('2026-02-01',8000))
+  self.assertEqual(self.balance('2026-02-01'),10000);self.assertEqual(self.balance('2026-03-01'),10000)
+ def test_saved_order_receipt_before_spend_allows_backdate(self):
   self.post('2026-03-01',self.bank,self.inc,8000);self.spend('2026-03-01',8000);self.spend('2026-02-01',8000)
   self.assertEqual(self.balance('2026-03-01'),2000)
  def test_release_posting_date_error_uses_common_format(self):

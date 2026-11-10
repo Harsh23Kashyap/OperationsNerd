@@ -31,7 +31,7 @@ class DesignationErrors(unittest.TestCase):
  def test_nonasset_still_rejected(self):
   with self.assertRaisesRegex(a.InvalidState,'asset account'):a.designate_capital_account(self.c,'bad',self.e)
  def test_posted_undesignated_still_rejected(self):
-  with self.assertRaisesRegex(a.InvalidState,'first posting'):a.designate_capital_account(self.c,'bank',self.b)
+  with self.assertRaisesRegex(a.InvalidState,'cash account cannot also be capital'):a.designate_capital_account(self.c,'bank',self.b)
  def test_duplicate_does_not_change_capacity(self):
   self.check_duplicate('other');self.assertEqual(a.fund(self.c,self.f,as_of='2026-12-31')['available_cents'],10000)
  def test_duplicate_twice_still_domain_error(self):self.check_duplicate('other');self.check_duplicate('other')

@@ -5,12 +5,13 @@ sys.path[:0]=[str(Path(__file__).resolve().parents[1]),str(Path(__file__).resolv
 import accounting as a
 from test_funds import with_chart,equity_pair,AS_OF
 
-def setup(kind='temporarily_restricted'):
+def setup(kind='temporarily_restricted',mapped=True):
  c,_=with_chart('reg_'+uuid.uuid4().hex);u,r,l,v,e=equity_pair(c)
  f=a.add_fund(c,'f','FUND','Grant',kind)['fund_id'];bank=a.account_by_code(c,'1000')['account_id']
  asset=a.add_account(c,'asset','1500','Equipment','asset')['account_id']
  a.designate_capital_account(c,'capital',asset)
  a.record_grant_receipt(c,'grant',f,'2026-01-01',10000,bank,v,'Grant')
+ if mapped:a.configure_fund_cash_accounts(c,'fixture-cash-map',f,[bank,a.account_by_code(c,'1010')['account_id']],'fixture-admin','Reviewed fixture bank and petty cash')
  return c,f,bank,asset,u,r,l,e
 
 def available(c,f):return a.fund(c,f,as_of=AS_OF)['available_cents']

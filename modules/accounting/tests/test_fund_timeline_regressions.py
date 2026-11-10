@@ -59,10 +59,10 @@ class TimelineTests(unittest.TestCase):
         self.reject_atomic(lambda:self.spend('2026-02-01'))
     def test_exact_later_capacity_allowed(self):
         self.spend(); self.spend('2026-02-01',2000); self.assertEqual(self.balance(),0)
-    def test_same_day_net_change_not_arbitrary_entry_order(self):
+    def test_same_day_later_receipt_cannot_hide_backdated_deficit(self):
         self.spend()
         self.post('2026-03-01',self.bank,self.inc,8000)
-        self.spend('2026-02-01',8000); self.assertEqual(self.balance(),2000)
+        self.reject_atomic(lambda:self.spend('2026-02-01',8000)); self.assertEqual(self.balance(),10000)
     def test_unrestricted_backdating_unchanged(self):
         self.spend(fund=a.default_fund_id(self.c)); self.spend('2026-02-01',fund=a.default_fund_id(self.c))
         self.assertEqual(self.balance(),10000)

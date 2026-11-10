@@ -630,10 +630,42 @@ def _constraint_audit(conn, fund_id, constraint, event, actor, reason, details, 
 
 
 def _cash_timeline(conn, fund_id):
-    return conn.execute("""SELECT e.entry_date, SUM(l.debit_cents-l.credit_cents) AS delta
+    return conn.execute("""SELECT e.entry_date, e.id AS entry_id, SUM(l.debit_cents-l.credit_cents) AS delta
         FROM acct_journal_lines l JOIN acct_journal_entries e ON e.id=l.entry_id
         JOIN acct_fund_cash_accounts c ON c.fund_id=l.fund_id AND c.account_id=l.account_id
-        WHERE l.fund_id=? GROUP BY e.entry_date ORDER BY e.entry_date""", (fund_id,)).fetchall()
+        WHERE l.fund_id=? GROUP BY e.id ORDER BY e.entry_date,e.id""", (fund_id,)).fetchall()
+
+
+def _capacity_timeline(conn, fund_id):
+    capital = _capital_designations_enabled(conn)
+    join = 'LEFT JOIN acct_fund_capital_accounts cap ON cap.account_id=l.account_id' if capital else ''
+    condition = 'OR cap.account_id IS NOT NULL' if capital else ''
+    return conn.execute(f"""SELECT e.entry_date,e.id AS entry_id,
+        SUM(CASE WHEN a.account_type IN ('income','equity','expense') {condition}
+                 THEN l.credit_cents-l.debit_cents ELSE 0 END) AS delta
+        FROM acct_journal_lines l JOIN acct_journal_entries e ON e.id=l.entry_id
+        JOIN acct_accounts a ON a.id=l.account_id
+        {join}
+        WHERE l.fund_id=? GROUP BY e.id ORDER BY e.entry_date,e.id""", (fund_id,)).fetchall()
+
+
+def _check_posting_prefixes(conn, fund_id, entry_date, decrease, constraint):
+    # New entries append after saved postings on their accounting date. Later
+    # dates keep their saved ID order, so a later receipt cannot hide a deficit.
+    timeline = _cash_timeline if constraint == 'cash' else _capacity_timeline
+    points = timeline(conn, fund_id)
+    balance = sum(p['delta'] for p in points if p['entry_date'] <= entry_date)
+    code = _fund_row(conn, fund_id)['code']
+    def check(day):
+        if balance < decrease:
+            noun = 'available' if constraint == 'capacity' else 'cash'
+            raise InsufficientFundBalance(f"fund {code} has {balance} cents {noun} on {day}; "
+                                          f"this entry reduces {constraint} by {decrease} cents")
+    check(entry_date)
+    for point in points:
+        if point['entry_date'] > entry_date:
+            balance += point['delta']
+            check(point['entry_date'])
 
 
 def _fund_cash_balance(conn, fund_id, as_of):
@@ -706,11 +738,16 @@ def set_fund_constraint(conn, idempotency_key, fund_id, constraint, enabled, adm
             if constraint == 'cash' and not fund_controls(conn, fund_id)['cash_configured']:
                 raise InvalidState('cash mapping must be reviewed before reinstatement')
             today = _as_of(None)
-            points = {today} | {r[0] for r in conn.execute('SELECT DISTINCT entry_date FROM acct_journal_entries WHERE entry_date>?', (today,))}
-            balance = _fund_cash_balance if constraint == 'cash' else _fund_available_balance
-            for day in sorted(points):
-                if balance(conn, fund_id, day) < 0:
-                    raise InsufficientFundBalance(f'cannot reinstate {constraint}: negative balance on {day}')
+            timeline = _cash_timeline if constraint == 'cash' else _capacity_timeline
+            points = timeline(conn, fund_id)
+            balance = sum(p['delta'] for p in points if p['entry_date'] <= today)
+            if balance < 0:
+                raise InsufficientFundBalance(f'cannot reinstate {constraint}: negative balance on {today}')
+            for point in points:
+                if point['entry_date'] > today:
+                    balance += point['delta']
+                    if balance < 0:
+                        raise InsufficientFundBalance(f'cannot reinstate {constraint}: negative posting balance on {point["entry_date"]}')
         anchor = conn.execute('SELECT MAX(id) FROM acct_journal_entries').fetchone()[0]
         _constraint_audit(conn, fund_id, constraint, 'reinstate' if enabled else 'suspend',
                           admin_actor, reason, {'enabled': enabled, 'last_entry_id': anchor})
@@ -722,24 +759,25 @@ def set_fund_constraint(conn, idempotency_key, fund_id, constraint, enabled, adm
 def _check_fund_cash_spending(conn, lines, entry_date):
     if not _fund_controls_enabled(conn):
         return
-    pending = {}
     default = default_fund_id(conn)
-    for line in lines:
-        fid = line.get('fund_id', default)
-        if conn.execute('SELECT 1 FROM acct_fund_cash_accounts WHERE fund_id=? AND account_id=?', (fid,line['account_id'])).fetchone():
-            pending[fid] = pending.get(fid, 0) + line.get('credit_cents',0) - line.get('debit_cents',0)
-    for fid, decrease in pending.items():
-        if decrease <= 0 or _constraint_suspension(conn, fid, 'cash'):
+    for fid in {line.get('fund_id', default) for line in lines}:
+        if _fund_row(conn, fid)['restriction_type'] == 'unrestricted' or _constraint_suspension(conn, fid, 'cash'):
             continue
-        balance = _fund_cash_balance(conn, fid, entry_date)
-        if balance < decrease:
-            raise InsufficientFundBalance(f'fund {fid} has {balance} cents cash on {entry_date}; entry reduces cash by {decrease} cents')
-        for point in _cash_timeline(conn, fid):
-            if point['entry_date'] <= entry_date:
-                continue
-            balance += point['delta']
-            if balance < decrease:
-                raise InsufficientFundBalance(f'fund {fid} would have negative cash on {point["entry_date"]}')
+        selected = [line for line in lines if line.get('fund_id', default) == fid]
+        ids = {r[0] for r in conn.execute('SELECT account_id FROM acct_fund_cash_accounts WHERE fund_id=?', (fid,))}
+        if not ids:
+            # Without a bank mapping, neither asset outflow nor an expense/
+            # capital commitment can be claimed cash-safe. Receipts stay usable
+            # to set up and repair the fund before mapping.
+            asset_outflow = sum(line.get('credit_cents',0) for line in selected
+                                if _account_row(conn,line['account_id'])['account_type'] == 'asset')
+            capacity_decrease = _pending_capacity_change(conn, selected)
+            if asset_outflow or capacity_decrease > 0:
+                raise InvalidState(f'fund {fid}: restricted spending requires reviewed bank/cash account mapping or explicit cash-check suspension')
+            continue
+        decrease = sum(line.get('credit_cents',0)-line.get('debit_cents',0) for line in selected if line['account_id'] in ids)
+        if decrease > 0:
+            _check_posting_prefixes(conn, fid, entry_date, decrease, 'cash')
 
 
 def _audit_suspended_entry(conn, lines, entry_id):
@@ -1961,54 +1999,27 @@ def _check_entry_funds_balanced(lines) -> None:
             raise Unbalanced(f"fund {fid}: debits ({totals['debit']}) must equal credits ({totals['credit']})")
 
 
-def _check_restricted_fund_spending(conn, lines, entry_date) -> None:
-    """Refuse a net capacity reduction that overdraws any affected dated balance.
+def _pending_capacity_change(conn, lines):
+    capital_ids = {r[0] for r in conn.execute('SELECT account_id FROM acct_fund_capital_accounts')} if _capital_designations_enabled(conn) else set()
+    return sum(line.get('debit_cents',0)-line.get('credit_cents',0) for line in lines
+               if _account_row(conn,line['account_id'])['account_type'] in ('income','equity','expense') or line['account_id'] in capital_ids)
 
-    Backdating remains allowed, but the new entry must also leave later posted
-    commitments covered. Balances are netted by accounting date, not intraday
-    entry-ID order; a same-date receipt can offset a same-date spend. This is
-    a date-end guarantee only. Income/equity debits consume capacity just as expense
-    and designated-capital debits do. Offsetting credits in the same entry are
-    counted once; cash transfers and bill settlement have no capacity impact.
+
+def _check_restricted_fund_spending(conn, lines, entry_date) -> None:
+    """A reducing posting must leave every affected saved posting prefix covered.
+
+    Ordering is (accounting date, immutable journal ID). A new backdated entry
+    appends on its date; employees control saved order by posting receipts first.
+    There is no reorder UI or inference that a future receipt has cleared.
     """
-    default_fund = default_fund_id(conn)
-    pending = {}
-    capital_ids = {r[0] for r in conn.execute("SELECT account_id FROM acct_fund_capital_accounts")} if _capital_designations_enabled(conn) else set()
-    for line in lines:
-        fid = line.get("fund_id", default_fund)
-        kind = _account_row(conn, line["account_id"])["account_type"]
-        if kind in ("income", "equity", "expense") or line["account_id"] in capital_ids:
-            delta = line.get("debit_cents", 0) - line.get("credit_cents", 0)
-            pending[fid] = pending.get(fid, 0) + delta
-    for fid, extra in pending.items():
-        fund_row = _fund_row(conn, fid)
-        if fund_row["restriction_type"] == "unrestricted" or extra <= 0 or _constraint_suspension(conn, fid, "capacity"):
+    default = default_fund_id(conn)
+    for fid in {line.get('fund_id', default) for line in lines}:
+        row = _fund_row(conn, fid)
+        if row['restriction_type'] == 'unrestricted' or _constraint_suspension(conn, fid, 'capacity'):
             continue
-        available = _fund_available_balance(conn, fid, entry_date)
-        def check_capacity(day):
-            if extra > available:
-                raise InsufficientFundBalance(
-                    f"fund {fund_row['code']} has {available} cents available on {day}; "
-                    f"this entry reduces capacity by {extra} cents")
-        check_capacity(entry_date)
-        # Only later entry dates can change the remaining capacity. Compute each
-        # day's net change once, rather than re-reading the full ledger per date.
-        capital_join = "LEFT JOIN acct_fund_capital_accounts cap ON cap.account_id=l.account_id" if _capital_designations_enabled(conn) else ""
-        capital_condition = "OR cap.account_id IS NOT NULL" if capital_join else ""
-        later = conn.execute(f"""SELECT e.entry_date,
-            SUM(CASE WHEN a.account_type IN ('income','equity')
-                           THEN l.credit_cents-l.debit_cents
-                     WHEN a.account_type='expense' {capital_condition}
-                           THEN l.credit_cents-l.debit_cents ELSE 0 END) AS delta
-            FROM acct_journal_lines l
-            JOIN acct_journal_entries e ON e.id=l.entry_id
-            JOIN acct_accounts a ON a.id=l.account_id
-            {capital_join}
-            WHERE l.fund_id=? AND e.entry_date>?
-            GROUP BY e.entry_date ORDER BY e.entry_date""", (fid, entry_date))
-        for row in later:
-            available += row["delta"]
-            check_capacity(row["entry_date"])
+        decrease = _pending_capacity_change(conn, [line for line in lines if line.get('fund_id', default) == fid])
+        if decrease > 0:
+            _check_posting_prefixes(conn, fid, entry_date, decrease, 'capacity')
 
 
 # ---------------------------------------------------------------- internals: customers and suppliers
