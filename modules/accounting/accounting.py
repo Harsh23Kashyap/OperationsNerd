@@ -523,6 +523,8 @@ def designate_capital_account(conn, idempotency_key: str, account_id: int) -> di
         account = _account_row(conn, account_id)
         if account["account_type"] != "asset":
             raise InvalidState("capital designation requires an asset account")
+        if conn.execute("SELECT 1 FROM acct_fund_capital_accounts WHERE account_id = ?", (account_id,)).fetchone():
+            raise InvalidState("account is already designated as capital; reuse the original idempotency key to replay")
         if conn.execute("SELECT 1 FROM acct_journal_lines WHERE account_id = ? LIMIT 1", (account_id,)).fetchone():
             raise InvalidState("capital designation must precede the account's first posting")
         conn.execute("INSERT INTO acct_fund_capital_accounts(account_id) VALUES (?)", (account_id,))
