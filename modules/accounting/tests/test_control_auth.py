@@ -1,6 +1,7 @@
 """Installer identities and local HTTP controls on disposable books."""
 import hashlib
 import os
+import secrets
 from pathlib import Path
 import sys
 import unittest
@@ -12,7 +13,7 @@ from test_fund_spendable_regressions import setup
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-PASSWORD = 'fixture-only-long-password'
+PASSWORD = secrets.token_urlsafe(24)
 
 
 class ControlAuthTests(unittest.TestCase):
