@@ -90,7 +90,7 @@ def a_bill(s, key="bill", number="DR-1", cents=27_000, **extra):
 
 def test_account_endpoints():
     s = seeded("accounts")
-    assert s.get("/accounting/schema") == {"module": "accounting", "version": 5}
+    assert s.get("/accounting/schema") == {"module": "accounting", "version": 6}
     assert [x["code"] for x in s.get("/accounting/accounts")] == [c[0] for c in CHART]
     assert [x["code"] for x in s.get("/accounting/accounts?account_type=income")] == ["4000"]
     bank = s.get("/accounting/accounts/1")
@@ -443,7 +443,7 @@ def test_main_mounts_the_router_and_the_ui_only_when_enabled():
     for path in ("/accounting/accounts", "/accounting/journal", "/accounting/invoices/{invoice_id}/send",
                  "/accounting/bills/{bill_id}/payments", "/accounting/reports/trial-balance"):
         assert path in on["paths"], path
-    assert on["schema"] == {"module": "accounting", "version": 5} and on["ui"] == 200
+    assert on["schema"] == {"module": "accounting", "version": 6} and on["ui"] == 200
     off = _routes_of_main("0")
     assert off["paths"] == [] and off["ui"] == 404
 
@@ -472,14 +472,17 @@ def test_capital_designation_endpoint_is_reachable_and_idempotent():
 
 
 def test_the_api_covers_every_command_the_module_has():
-    """A command nobody can reach over HTTP is a gap; this catches one that is added later and not wired up."""
+    """HTTP commands stay covered; trusted-local controls stay unexposed until admin auth exists."""
     paths = {route.path for route in api.router.routes}
     conn = accounting.connect(":memory:")
     accounting.init_db(conn)
     commands = {r["name"] for r in conn.execute("SELECT name FROM acct_command_names")}
     # post_payroll_entry is not a command name of its own: it posts with source 'payroll' through
     # /accounting/journal, which the Literal on NewJournalEntry.source allows.
-    assert commands == {"add_account", "update_account", "post_journal_entry", "reverse_journal_entry",
+    local_admin_only = {"configure_fund_cash_accounts", "set_fund_constraint"}
+    assert local_admin_only <= commands
+    assert not any("constraint" in path or "cash-accounts" in path for path in paths)
+    assert commands - local_admin_only == {"add_account", "update_account", "post_journal_entry", "reverse_journal_entry",
                         "add_customer", "update_customer", "add_supplier", "update_supplier",
                         "create_invoice", "send_invoice", "record_invoice_payment", "void_invoice",
                         "create_bill", "receive_bill", "record_bill_payment", "void_bill",

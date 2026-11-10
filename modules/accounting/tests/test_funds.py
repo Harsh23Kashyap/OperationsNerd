@@ -51,6 +51,7 @@ def test_per_fund_balance_enforced_in_python_and_database():
     conn, _ = with_chart("per_fund_bal")
     gen = a.default_fund_id(conn)
     forest = a.add_fund(conn, "f", "FRST", "Forest", "temporarily_restricted")["fund_id"]
+    a.configure_fund_cash_accounts(conn,"fixture-map",forest,[a.account_by_code(conn,"1000")["account_id"]],"fixture-admin","Reviewed bank")
     rejected(lambda: a.post_journal_entry(conn, "bad", "2026-01-02", "Unbalanced in fund", [
         {"account_code": "1000", "debit_cents": 1_000, "fund_id": gen},
         {"account_code": "3000", "credit_cents": 500, "fund_id": gen},
@@ -69,6 +70,7 @@ def test_grant_receipt_release_and_overspend_block():
     conn, _ = with_chart("grant_flow")
     unres, restricted, clearing, grant_rev, expense = equity_pair(conn)
     forest = a.add_fund(conn, "ff", "FRST", "Forest", "temporarily_restricted")["fund_id"]
+    a.configure_fund_cash_accounts(conn,"fixture-map",forest,[a.account_by_code(conn,"1000")["account_id"]],"fixture-admin","Reviewed bank")
     bank = a.account_by_code(conn, "1000")["account_id"]
     a.record_grant_receipt(conn, "g1", forest, "2026-02-01", 500_000, bank, grant_rev, "Forest grant")
     fb = a.fund(conn, forest, as_of=AS_OF)
@@ -94,6 +96,7 @@ def test_bill_posts_to_restricted_fund():
     conn, _ = with_chart("bill_fund")
     _, _, _, grant_rev, expense = equity_pair(conn)
     forest = a.add_fund(conn, "bf", "FRST", "Forest", "temporarily_restricted")["fund_id"]
+    a.configure_fund_cash_accounts(conn,"fixture-map",forest,[a.account_by_code(conn,"1000")["account_id"]],"fixture-admin","Reviewed bank")
     bank = a.account_by_code(conn, "1000")["account_id"]
     a.record_grant_receipt(conn, "g", forest, "2026-01-10", 300_000, bank, grant_rev, "Grant")
     supplier = a.add_supplier(conn, "s", "Vendor")
@@ -125,6 +128,7 @@ def test_reports_without_fund_filter_unchanged_and_statement_of_activities():
     equity_pair(conn)
     gen = a.default_fund_id(conn)
     forest = a.add_fund(conn, "rf", "FRST", "Forest", "temporarily_restricted")["fund_id"]
+    a.configure_fund_cash_accounts(conn,"fixture-map",forest,[a.account_by_code(conn,"1000")["account_id"]],"fixture-admin","Reviewed bank")
     bank = a.account_by_code(conn, "1000")["account_id"]
     rev = a.account_by_code(conn, "4000")["account_id"]
     a.record_grant_receipt(conn, "g-gen", gen, "2026-01-05", 100_000, bank, rev, "Unrestricted grant")

@@ -502,3 +502,61 @@ Permanent funds always remain restricted by default. The release command refuses
 them instead of borrowing temporary-purpose rules. No application-level override
 or permanent-release exception is provided. A deliberate programmer change is
 separate from the normal release workflow.
+
+
+### Dated restricted-fund capacity guard (proposal on the fund fix)
+
+A new entry may be backdated only when its net reduction in restricted capacity
+fits both its posting date and every later posted date. For example, a 10,000-cent
+grant followed by an 8,000-cent March expense cannot fund another 8,000-cent
+February expense: that would leave March at -6,000 cents. A later April receipt
+does not cover the March gap. Exact remaining capacity is allowed.
+
+The guard counts net income, equity, expense and explicitly designated capital
+changes, including income refunds and manual income reversals. It checks the
+whole entry, so offsetting income/expense lines count once. Cash transfers,
+bill settlement and unrestricted-fund behavior are unchanged. Fund releases go
+through the same dated guard. Rejected service commands roll back their journal
+lines and leave their idempotency key free; the local HTTP router returns 409.
+
+This is an application-command guard, not a new SQL-file access control or
+financial-policy engine. It does not repair existing deficits or classify old
+asset histories. A capacity-increasing correction remains possible. The module
+still needs reviewed chart mappings and business/auth routing before real use;
+no merge, deployment or real-books readiness is implied.
+
+Offline regression command (disposable SQLite, real local FastAPI router, no
+model calls):
+
+```bash
+python modules/accounting/tests/test_fund_timeline_regressions.py
+```
+
+For the same tests against an older source checkout:
+
+```bash
+ACCOUNTING_SOURCE_ROOT=/path/to/older/checkout python modules/accounting/tests/test_fund_timeline_regressions.py
+```
+
+### Restricted-fund posting boundary
+
+The guard checks the proposed entry's reduction at its posting position and
+at every affected later saved posting, ordered by accounting date and then
+immutable journal-entry ID. New backdated entries append after saved entries
+on their date. A later receipt on the same date cannot hide an earlier
+negative prefix. Employees control saved order by posting receipts before
+spending. This records accounting postings, not proof that a bank check cleared,
+and there is no employee resequencing UI.
+
+Restricted-fund asset outflows and net capacity-reducing commitments require
+an explicit reviewed bank/cash mapping. Unmapped spending fails closed unless
+the cash check has been explicitly suspended with an actor, reason and audit.
+Receipts remain possible for setup and repair. Unrestricted behavior is
+unchanged. Cash and capacity checks are independent, so suspending one does
+not silently disable the other.
+
+The guard does not rewrite historical exceptions, infer capital or cash
+classifications, or repair existing deficits. Permanent donor rules and ledger
+invariants stay in place. The local suspension commands are not authenticated
+admin access, have no HTTP route, and are not ready for production use. See
+`documentation/FUND_CONSTRAINT_CONTROLS.md` for audit, mapping and login limits.
