@@ -562,8 +562,9 @@ def release_from_restriction(conn, idempotency_key: str, from_fund_id: int, amou
         to_fund = default_fund_id(conn)
         available = _fund_available_balance(conn, from_fund_id, entry_date)
         if amount_cents > available:
-            raise InsufficientFundBalance(f"fund {from_fund['code']} has {available} cents available, "
-                                          f"can't release {amount_cents} cents")
+            raise InsufficientFundBalance(
+                f"fund {from_fund['code']} has {available} cents available on {entry_date}; "
+                f"this entry reduces capacity by {amount_cents} cents")
         donor = _account_row(conn, donor_restricted_account_id)
         unrestricted = _account_row(conn, unrestricted_net_assets_account_id)
         clearing = _account_row(conn, clearing_account_id)
@@ -1801,7 +1802,9 @@ def _check_restricted_fund_spending(conn, lines, entry_date) -> None:
     """Refuse a net capacity reduction that overdraws any affected dated balance.
 
     Backdating remains allowed, but the new entry must also leave later posted
-    commitments covered. Income/equity debits consume capacity just as expense
+    commitments covered. Balances are netted by accounting date, not intraday
+    entry-ID order; a same-date receipt can offset a same-date spend. This is
+    a date-end guarantee only. Income/equity debits consume capacity just as expense
     and designated-capital debits do. Offsetting credits in the same entry are
     counted once; cash transfers and bill settlement have no capacity impact.
     """

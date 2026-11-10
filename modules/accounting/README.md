@@ -537,3 +537,17 @@ For the same tests against an older source checkout:
 ```bash
 ACCOUNTING_SOURCE_ROOT=/path/to/older/checkout python modules/accounting/tests/test_fund_timeline_regressions.py
 ```
+
+### Restricted-capacity timeline boundary
+
+The guard checks the proposed entry's net capacity reduction on its accounting
+date and on every later posted accounting date. Existing movements are netted
+by date, not ordered by journal-entry ID within a day. A receipt and an expense
+on the same date can therefore offset each other when evaluating an earlier
+backdated entry. This is an end-of-date capacity check, not an intraday cash or
+commitment guarantee. Entry IDs do not establish an agreed intraday accounting
+order. A stricter rule needs that ordering policy before implementation.
+
+The guard does not rewrite earlier release entries, infer capital designations
+for unmapped asset accounts, or repair existing deficits. Permanent funds remain
+restricted by default. The code alone is not approval to use this on real books.
