@@ -523,6 +523,8 @@ def designate_capital_account(conn, idempotency_key: str, account_id: int) -> di
         account = _account_row(conn, account_id)
         if account["account_type"] != "asset":
             raise InvalidState("capital designation requires an asset account")
+        if _fund_controls_enabled(conn) and conn.execute("SELECT 1 FROM acct_fund_cash_accounts WHERE account_id=?", (account_id,)).fetchone():
+            raise InvalidState("a cash account cannot also be capital")
         if conn.execute("SELECT 1 FROM acct_fund_capital_accounts WHERE account_id = ?", (account_id,)).fetchone():
             raise InvalidState("account is already designated as capital; reuse the original idempotency key to replay")
         if conn.execute("SELECT 1 FROM acct_journal_lines WHERE account_id = ? LIMIT 1", (account_id,)).fetchone():
@@ -561,7 +563,7 @@ def release_from_restriction(conn, idempotency_key: str, from_fund_id: int, amou
             raise InvalidState(f"fund {from_fund_id} is not active")
         to_fund = default_fund_id(conn)
         available = _fund_available_balance(conn, from_fund_id, entry_date)
-        if amount_cents > available:
+        if amount_cents > available and not _constraint_suspension(conn, from_fund_id, "capacity"):
             raise InsufficientFundBalance(
                 f"fund {from_fund['code']} has {available} cents available on {entry_date}; "
                 f"this entry reduces capacity by {amount_cents} cents")
@@ -592,6 +594,164 @@ def release_from_restriction(conn, idempotency_key: str, from_fund_id: int, amou
                "unrestricted_net_assets_account_id": unrestricted_net_assets_account_id,
                "clearing_account_id": clearing_account_id}
     return _run(conn, idempotency_key, "release_from_restriction", payload, work)
+
+
+def _fund_controls_enabled(conn):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='acct_fund_constraint_audit'").fetchone() is not None
+
+
+def _constraint_suspension(conn, fund_id, constraint):
+    if not _fund_controls_enabled(conn):
+        return None
+    row = conn.execute("""SELECT * FROM acct_fund_constraint_audit
+        WHERE fund_id=? AND constraint_name=? AND event IN ('suspend','reinstate')
+        ORDER BY id DESC LIMIT 1""", (fund_id, constraint)).fetchone()
+    return row if row and row['event'] == 'suspend' else None
+
+
+def fund_constraint_audit(conn, fund_id):
+    _fund_row(conn, fund_id)
+    return [dict(r) for r in conn.execute("SELECT * FROM acct_fund_constraint_audit WHERE fund_id=? ORDER BY id", (fund_id,))]
+
+
+def fund_controls(conn, fund_id):
+    """Report configuration separately from enforcement, never call unmapped assets cash."""
+    _fund_row(conn, fund_id)
+    ids = [r[0] for r in conn.execute("SELECT account_id FROM acct_fund_cash_accounts WHERE fund_id=? ORDER BY account_id", (fund_id,))]
+    return dict(fund_id=fund_id, capacity_enabled=not bool(_constraint_suspension(conn, fund_id, 'capacity')),
+                cash_enabled=not bool(_constraint_suspension(conn, fund_id, 'cash')),
+                cash_configured=bool(ids), cash_enforced=bool(ids) and not bool(_constraint_suspension(conn, fund_id, 'cash')), cash_account_ids=ids)
+
+
+def _constraint_audit(conn, fund_id, constraint, event, actor, reason, details, entry_id=None):
+    return conn.execute("""INSERT INTO acct_fund_constraint_audit
+        (fund_id,constraint_name,event,actor,reason,details,journal_entry_id) VALUES (?,?,?,?,?,?,?)""",
+        (fund_id, constraint, event, actor, reason, json.dumps(details, sort_keys=True), entry_id)).lastrowid
+
+
+def _cash_timeline(conn, fund_id):
+    return conn.execute("""SELECT e.entry_date, SUM(l.debit_cents-l.credit_cents) AS delta
+        FROM acct_journal_lines l JOIN acct_journal_entries e ON e.id=l.entry_id
+        JOIN acct_fund_cash_accounts c ON c.fund_id=l.fund_id AND c.account_id=l.account_id
+        WHERE l.fund_id=? GROUP BY e.entry_date ORDER BY e.entry_date""", (fund_id,)).fetchall()
+
+
+def _fund_cash_balance(conn, fund_id, as_of):
+    return sum(r['delta'] for r in _cash_timeline(conn, fund_id) if r['entry_date'] <= as_of)
+
+
+def configure_fund_cash_accounts(conn, idempotency_key, fund_id, account_ids, admin_actor, reason):
+    """One reviewed cash mapping per restricted fund; local trusted caller only.
+
+    admin_actor is an audit attribution, NOT authentication. No HTTP override
+    route exists. A future authenticated adapter must authorize its own admin.
+    """
+    _positive_int('fund_id', fund_id)
+    admin_actor = _clean_text('admin_actor', admin_actor)
+    reason = _clean_text('reason', reason, MAX_LONG_TEXT)
+    if not isinstance(account_ids, list) or not account_ids or len(account_ids) > MAX_LINES:
+        raise ValueError('account_ids must be a non-empty bounded list')
+    for aid in account_ids:
+        _positive_int('cash account_id', aid)
+    if len(set(account_ids)) != len(account_ids):
+        raise ValueError('cash account_ids must be distinct')
+    account_ids = sorted(account_ids)
+    def work():
+        row = _fund_row(conn, fund_id)
+        if row['restriction_type'] == 'unrestricted':
+            raise InvalidState('cash controls here apply to restricted funds only')
+        if fund_controls(conn, fund_id)['cash_configured']:
+            raise InvalidState('cash mapping already configured; reviewed migration required to change it')
+        for aid in account_ids:
+            a = _account_row(conn, aid)
+            if a['account_type'] != 'asset' or not a['is_active'] or a['role'] is not None:
+                raise InvalidState('cash mapping requires active non-control asset accounts')
+            if conn.execute('SELECT 1 FROM acct_fund_capital_accounts WHERE account_id=?', (aid,)).fetchone():
+                raise InvalidState('a capital account cannot also be cash')
+            conn.execute('INSERT INTO acct_fund_cash_accounts(fund_id,account_id) VALUES (?,?)', (fund_id, aid))
+        # Existing history is reviewed explicitly, not silently grandfathered.
+        balance = 0
+        if not _constraint_suspension(conn, fund_id, 'cash'):
+            for point in _cash_timeline(conn, fund_id):
+                balance += point['delta']
+                if balance < 0:
+                    raise InsufficientFundBalance('cash mapping exposes a negative dated balance; review or explicitly suspend the cash constraint first')
+        _constraint_audit(conn, fund_id, 'cash', 'configure_cash', admin_actor, reason, {'account_ids': account_ids})
+        return fund_controls(conn, fund_id)
+    return _run(conn, idempotency_key, 'configure_fund_cash_accounts',
+                dict(fund_id=fund_id,account_ids=account_ids,admin_actor=admin_actor,reason=reason), work)
+
+
+def set_fund_constraint(conn, idempotency_key, fund_id, constraint, enabled, admin_actor, reason):
+    """Suspend/reinstate one financial check, never a journal or donor-immutability rule.
+
+    Local trusted caller only; the supplied actor is not proof of an admin role.
+    Reinstatement checks today's and later balances, retaining audited earlier
+    exceptions rather than erasing them or rewriting the journal.
+    """
+    _positive_int('fund_id', fund_id)
+    if constraint not in ('cash', 'capacity'):
+        raise ValueError('constraint must be cash or capacity')
+    _bool('enabled', enabled)
+    admin_actor = _clean_text('admin_actor', admin_actor)
+    reason = _clean_text('reason', reason, MAX_LONG_TEXT)
+    def work():
+        row = _fund_row(conn, fund_id)
+        if row['restriction_type'] == 'unrestricted':
+            raise InvalidState('constraint overrides here apply to restricted funds only')
+        suspended = _constraint_suspension(conn, fund_id, constraint)
+        if enabled == (not bool(suspended)):
+            raise InvalidState('constraint is already in the requested state')
+        if enabled:
+            if constraint == 'cash' and not fund_controls(conn, fund_id)['cash_configured']:
+                raise InvalidState('cash mapping must be reviewed before reinstatement')
+            today = _as_of(None)
+            points = {today} | {r[0] for r in conn.execute('SELECT DISTINCT entry_date FROM acct_journal_entries WHERE entry_date>?', (today,))}
+            balance = _fund_cash_balance if constraint == 'cash' else _fund_available_balance
+            for day in sorted(points):
+                if balance(conn, fund_id, day) < 0:
+                    raise InsufficientFundBalance(f'cannot reinstate {constraint}: negative balance on {day}')
+        anchor = conn.execute('SELECT MAX(id) FROM acct_journal_entries').fetchone()[0]
+        _constraint_audit(conn, fund_id, constraint, 'reinstate' if enabled else 'suspend',
+                          admin_actor, reason, {'enabled': enabled, 'last_entry_id': anchor})
+        return fund_controls(conn, fund_id)
+    return _run(conn, idempotency_key, 'set_fund_constraint',
+                dict(fund_id=fund_id,constraint=constraint,enabled=enabled,admin_actor=admin_actor,reason=reason), work)
+
+
+def _check_fund_cash_spending(conn, lines, entry_date):
+    if not _fund_controls_enabled(conn):
+        return
+    pending = {}
+    default = default_fund_id(conn)
+    for line in lines:
+        fid = line.get('fund_id', default)
+        if conn.execute('SELECT 1 FROM acct_fund_cash_accounts WHERE fund_id=? AND account_id=?', (fid,line['account_id'])).fetchone():
+            pending[fid] = pending.get(fid, 0) + line.get('credit_cents',0) - line.get('debit_cents',0)
+    for fid, decrease in pending.items():
+        if decrease <= 0 or _constraint_suspension(conn, fid, 'cash'):
+            continue
+        balance = _fund_cash_balance(conn, fid, entry_date)
+        if balance < decrease:
+            raise InsufficientFundBalance(f'fund {fid} has {balance} cents cash on {entry_date}; entry reduces cash by {decrease} cents')
+        for point in _cash_timeline(conn, fid):
+            if point['entry_date'] <= entry_date:
+                continue
+            balance += point['delta']
+            if balance < decrease:
+                raise InsufficientFundBalance(f'fund {fid} would have negative cash on {point["entry_date"]}')
+
+
+def _audit_suspended_entry(conn, lines, entry_id):
+    if not _fund_controls_enabled(conn):
+        return
+    default = default_fund_id(conn)
+    for fid in {line.get('fund_id', default) for line in lines}:
+        for constraint in ('cash','capacity'):
+            suspension = _constraint_suspension(conn, fid, constraint)
+            if suspension:
+                _constraint_audit(conn, fid, constraint, 'entry_while_suspended', suspension['actor'],
+                                  suspension['reason'], {'suspension_id': suspension['id']}, entry_id)
 
 
 # ---------------------------------------------------------------- the journal
@@ -1520,6 +1680,7 @@ def _insert_entry(conn, entry_date, memo, source, source_ref, lines, idempotency
         # Per-fund balance before the database trigger fires, so overspend can raise a clear error.
         _check_entry_funds_balanced(lines)
         _check_restricted_fund_spending(conn, lines, entry_date)
+        _check_fund_cash_spending(conn, lines, entry_date)
     # The entry row comes last (see 0001), so its id is chosen here. BEGIN IMMEDIATE holds the write
     # lock, so no other writer can take it meanwhile.
     entry_id = _next_id(conn, "acct_journal_entries")
@@ -1542,6 +1703,8 @@ def _insert_entry(conn, entry_date, memo, source, source_ref, lines, idempotency
                                                       reverses_id, idempotency_key)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                  (entry_id, entry_date, memo, source, source_ref, debits, reverses_id, idempotency_key))
+    if funds_on:
+        _audit_suspended_entry(conn, lines, entry_id)
     return entry_id
 
 
@@ -1819,7 +1982,7 @@ def _check_restricted_fund_spending(conn, lines, entry_date) -> None:
             pending[fid] = pending.get(fid, 0) + delta
     for fid, extra in pending.items():
         fund_row = _fund_row(conn, fid)
-        if fund_row["restriction_type"] == "unrestricted" or extra <= 0:
+        if fund_row["restriction_type"] == "unrestricted" or extra <= 0 or _constraint_suspension(conn, fid, "capacity"):
             continue
         available = _fund_available_balance(conn, fid, entry_date)
         def check_capacity(day):
