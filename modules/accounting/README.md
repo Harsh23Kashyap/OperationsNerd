@@ -560,3 +560,38 @@ classifications, or repair existing deficits. Permanent donor rules and ledger
 invariants stay in place. The local suspension commands are not authenticated
 admin access, have no HTTP route, and are not ready for production use. See
 `documentation/FUND_CONSTRAINT_CONTROLS.md` for audit, mapping and login limits.
+
+### Installer-managed local fund controls
+
+This is a development-only control surface, not production CRM authentication or
+per-business isolation. Ordinary ledger routes are unchanged and are not secured
+by this login. Do not expose this development service to an untrusted network.
+The controls and static page stay disabled in production through the existing
+`APP_ENV=production` mount guard; direct control routes also return 404 there.
+
+An installer with filesystem access chooses identities at the terminal:
+
+```sh
+python modules/accounting/install_admin.py --database /path/to/existing-books.db --username local.admin
+```
+
+The database must exist. It is migrated with the normal backup-before-upgrade
+helper. The command prompts twice for a 12-256 character password, never accepts
+one as a command argument, and does not create a shared/default administrator.
+Use `--role viewer` for read-only review or `--disable` to revoke an identity.
+Re-running it resets the password/role/active status and revokes all sessions.
+It is an installer operation, not an HTTP registration endpoint.
+
+With the local accounting module enabled, open `/accounting/ui/controls.html`.
+Log in, load a fund's controls and audit, then review cash account IDs before
+saving their immutable mapping. Suspension and reinstatement each need a reason
+and confirmation. Actor identity is derived from the authenticated user, not
+accepted from the browser. Existing database checks still decide whether a
+mapping or reinstatement is safe; authentication does not bypass them.
+
+Passwords use random-salt scrypt. Sessions last one hour and only SHA-256 token
+hashes are stored in the database. Browser tokens stay in memory, not cookies or
+localStorage; reload requires login. Logout revokes the presented session.
+Five failed logins lock an identity for five minutes. This local lockout is not a
+network-wide rate limiter and must not be treated as internet-facing protection.
+A viewer can read controls and audit but cannot change either.

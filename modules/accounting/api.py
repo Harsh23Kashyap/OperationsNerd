@@ -22,9 +22,9 @@ whose schema is behind this code is migrated, and verify_schema() runs every
 time.
 
 The database is the file named by ACCOUNTING_DATABASE_PATH. There is no
-per-business database routing or auth on main yet, so this router is a local
+per-business database routing or ordinary ledger auth on main yet, so this router is a local
 development surface only: main.py mounts it when ACCOUNTING_MODULE_ENABLED=1
-and never when APP_ENV=production. Once the per-business database and login
+and never when APP_ENV=production. Once the per-business database and ledger authorization
 land, the router should take the signed-in business's connection instead (see
 README).
 """
@@ -37,7 +37,7 @@ import threading
 from pathlib import Path as _FilePath
 from typing import Annotated, Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
+from fastapi import Request, APIRouter, Depends, Header, HTTPException, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -560,3 +560,104 @@ def ap_aging(as_of: Optional[str] = Query(None, max_length=10), conn=Depends(get
 @router.get("/schema")
 def schema(conn=Depends(get_conn)):
     return {"module": accounting.MODULE, "version": accounting.schema_version(conn)}
+
+
+# Local-only authenticated fund controls. Ordinary ledger endpoints remain a
+# development surface; this does not provide core CRM/business isolation.
+control_auth = _sibling('accounting_control_auth', 'control_auth.py')
+
+
+def _local_controls():
+    if os.environ.get('APP_ENV', '').lower() == 'production':
+        raise HTTPException(404, 'Not available')
+
+
+class ControlLogin(_Body):
+    username: Annotated[str, Field(min_length=1, max_length=160)]
+    password: Annotated[str, Field(min_length=12, max_length=256, repr=False)]
+
+
+class CashMapping(_Body):
+    account_ids: list[int] = Field(min_length=1, max_length=100)
+    reason: LongText
+
+
+class ConstraintChange(_Body):
+    enabled: bool
+    reason: LongText
+
+
+def _control_token(authorization: str | None = Header(None, max_length=512)):
+    _local_controls()
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(401, 'Login required')
+    return authorization[7:]
+
+
+def _control_user(token=Depends(_control_token), conn=Depends(get_conn)):
+    try:
+        user = control_auth.principal(conn, token)
+    except control_auth.Unauthorized:
+        raise HTTPException(401, 'Login required') from None
+    except sqlite3.DatabaseError as e:
+        raise HTTPException(503, f'the accounting database cannot be used: {e}') from None
+    return user
+
+
+def _control_admin(user=Depends(_control_user)):
+    if user['role'] != 'admin':
+        raise HTTPException(403, 'Administrator required')
+    return user
+
+
+async def _control_credentials(request: Request):
+    # FastAPI's default validation errors include rejected input values. Never
+    # return a supplied password, including on malformed/extra-field requests.
+    try:
+        return ControlLogin.model_validate(await request.json())
+    except (ValueError, TypeError):
+        raise HTTPException(401, 'Invalid credentials') from None
+
+
+@router.post('/controls/login', dependencies=[Depends(_local_controls)])
+def control_login(body=Depends(_control_credentials), conn=Depends(get_conn)):
+    from fastapi.responses import JSONResponse
+    try:
+        credentials = control_auth.login(conn, body.username, body.password)
+    except control_auth.Unauthorized:
+        raise HTTPException(401, 'Invalid credentials') from None
+    except sqlite3.DatabaseError as e:
+        raise HTTPException(503, f'the accounting database cannot be used: {e}') from None
+    return JSONResponse(credentials, headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/controls/logout', dependencies=[Depends(_local_controls)])
+def control_logout(token=Depends(_control_token), conn=Depends(get_conn)):
+    _call(control_auth.logout, conn, token)
+    return {'logged_out': True}
+
+
+@router.get('/funds/{fund_id}/controls')
+def get_fund_controls(fund_id: int, user=Depends(_control_user), conn=Depends(get_conn)):
+    return _call(accounting.fund_controls, conn, fund_id)
+
+
+@router.get('/funds/{fund_id}/controls/audit')
+def get_fund_control_audit(fund_id: int, user=Depends(_control_user), conn=Depends(get_conn)):
+    return _call(accounting.fund_constraint_audit, conn, fund_id)
+
+
+@router.post('/funds/{fund_id}/controls/cash-accounts')
+def configure_cash(fund_id: int, body: CashMapping, user=Depends(_control_admin),
+                   key=Depends(_key), conn=Depends(get_conn)):
+    actor = f"control-user:{user['id']}:{user['username']}"
+    return _call(accounting.configure_fund_cash_accounts, conn, key, fund_id,
+                 body.account_ids, actor, body.reason)
+
+
+@router.post('/funds/{fund_id}/controls/{constraint}')
+def change_constraint(fund_id: int, constraint: Literal['cash', 'capacity'], body: ConstraintChange,
+                      user=Depends(_control_admin), key=Depends(_key), conn=Depends(get_conn)):
+    actor = f"control-user:{user['id']}:{user['username']}"
+    return _call(accounting.set_fund_constraint, conn, key, fund_id, constraint,
+                 body.enabled, actor, body.reason)
