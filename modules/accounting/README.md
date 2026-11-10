@@ -502,3 +502,38 @@ Permanent funds always remain restricted by default. The release command refuses
 them instead of borrowing temporary-purpose rules. No application-level override
 or permanent-release exception is provided. A deliberate programmer change is
 separate from the normal release workflow.
+
+
+### Dated restricted-fund capacity guard (proposal on the fund fix)
+
+A new entry may be backdated only when its net reduction in restricted capacity
+fits both its posting date and every later posted date. For example, a 10,000-cent
+grant followed by an 8,000-cent March expense cannot fund another 8,000-cent
+February expense: that would leave March at -6,000 cents. A later April receipt
+does not cover the March gap. Exact remaining capacity is allowed.
+
+The guard counts net income, equity, expense and explicitly designated capital
+changes, including income refunds and manual income reversals. It checks the
+whole entry, so offsetting income/expense lines count once. Cash transfers,
+bill settlement and unrestricted-fund behavior are unchanged. Fund releases go
+through the same dated guard. Rejected service commands roll back their journal
+lines and leave their idempotency key free; the local HTTP router returns 409.
+
+This is an application-command guard, not a new SQL-file access control or
+financial-policy engine. It does not repair existing deficits or classify old
+asset histories. A capacity-increasing correction remains possible. The module
+still needs reviewed chart mappings and business/auth routing before real use;
+no merge, deployment or real-books readiness is implied.
+
+Offline regression command (disposable SQLite, real local FastAPI router, no
+model calls):
+
+```bash
+python modules/accounting/tests/test_fund_timeline_regressions.py
+```
+
+For the same tests against an older source checkout:
+
+```bash
+ACCOUNTING_SOURCE_ROOT=/path/to/older/checkout python modules/accounting/tests/test_fund_timeline_regressions.py
+```

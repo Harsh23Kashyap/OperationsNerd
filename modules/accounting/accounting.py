@@ -581,7 +581,7 @@ def release_from_restriction(conn, idempotency_key: str, from_fund_id: int, amou
             row["fund_id"] = line["fund_id"]
             resolved.append(row)
         entry_id = _insert_entry(conn, entry_date, memo, "fund_release", from_fund["code"], resolved,
-                                 idempotency_key, skip_restricted_check=True)
+                                 idempotency_key)
         return journal_entry(conn, entry_id)
 
     payload = {"from_fund_id": from_fund_id, "amount_cents": amount_cents, "entry_date": entry_date,
@@ -1500,8 +1500,7 @@ def _entry_line(account_id, side, amount_cents, memo=None, fund_id=None) -> dict
     return line
 
 
-def _insert_entry(conn, entry_date, memo, source, source_ref, lines, idempotency_key, reverses_id=None,
-                  skip_restricted_check=False) -> int:
+def _insert_entry(conn, entry_date, memo, source, source_ref, lines, idempotency_key, reverses_id=None) -> int:
     """Writes the lines, then the entry row that closes them. The database checks that debits equal
     credits and that both equal the total (migration 0001), so this can't leave the books unbalanced
     even if the caller's arithmetic is wrong."""
@@ -1517,8 +1516,7 @@ def _insert_entry(conn, entry_date, memo, source, source_ref, lines, idempotency
     if funds_on:
         # Per-fund balance before the database trigger fires, so overspend can raise a clear error.
         _check_entry_funds_balanced(lines)
-        if not skip_restricted_check:
-            _check_restricted_fund_spending(conn, lines, entry_date)
+        _check_restricted_fund_spending(conn, lines, entry_date)
     # The entry row comes last (see 0001), so its id is chosen here. BEGIN IMMEDIATE holds the write
     # lock, so no other writer can take it meanwhile.
     entry_id = _next_id(conn, "acct_journal_entries")
@@ -1798,24 +1796,51 @@ def _check_entry_funds_balanced(lines) -> None:
 
 
 def _check_restricted_fund_spending(conn, lines, entry_date) -> None:
-    """Refuses net expense + designated capital outflow beyond restricted capacity."""
+    """Refuse a net capacity reduction that overdraws any affected dated balance.
+
+    Backdating remains allowed, but the new entry must also leave later posted
+    commitments covered. Income/equity debits consume capacity just as expense
+    and designated-capital debits do. Offsetting credits in the same entry are
+    counted once; cash transfers and bill settlement have no capacity impact.
+    """
     default_fund = default_fund_id(conn)
-    pending = {}  # net expense + designated capital outflow per fund
+    pending = {}
     capital_ids = {r[0] for r in conn.execute("SELECT account_id FROM acct_fund_capital_accounts")} if _capital_designations_enabled(conn) else set()
     for line in lines:
         fid = line.get("fund_id", default_fund)
         kind = _account_row(conn, line["account_id"])["account_type"]
-        if kind == "expense" or line["account_id"] in capital_ids:
+        if kind in ("income", "equity", "expense") or line["account_id"] in capital_ids:
             delta = line.get("debit_cents", 0) - line.get("credit_cents", 0)
             pending[fid] = pending.get(fid, 0) + delta
     for fid, extra in pending.items():
         fund_row = _fund_row(conn, fid)
-        if fund_row["restriction_type"] == "unrestricted":
+        if fund_row["restriction_type"] == "unrestricted" or extra <= 0:
             continue
         available = _fund_available_balance(conn, fid, entry_date)
-        if extra > 0 and extra > available:
-            raise InsufficientFundBalance(f"fund {fund_row['code']} has {available} cents available, "
-                                          f"this entry spends {extra} cents")
+        def check_capacity(day):
+            if extra > available:
+                raise InsufficientFundBalance(
+                    f"fund {fund_row['code']} has {available} cents available on {day}; "
+                    f"this entry reduces capacity by {extra} cents")
+        check_capacity(entry_date)
+        # Only later entry dates can change the remaining capacity. Compute each
+        # day's net change once, rather than re-reading the full ledger per date.
+        capital_join = "LEFT JOIN acct_fund_capital_accounts cap ON cap.account_id=l.account_id" if _capital_designations_enabled(conn) else ""
+        capital_condition = "OR cap.account_id IS NOT NULL" if capital_join else ""
+        later = conn.execute(f"""SELECT e.entry_date,
+            SUM(CASE WHEN a.account_type IN ('income','equity')
+                           THEN l.credit_cents-l.debit_cents
+                     WHEN a.account_type='expense' {capital_condition}
+                           THEN l.credit_cents-l.debit_cents ELSE 0 END) AS delta
+            FROM acct_journal_lines l
+            JOIN acct_journal_entries e ON e.id=l.entry_id
+            JOIN acct_accounts a ON a.id=l.account_id
+            {capital_join}
+            WHERE l.fund_id=? AND e.entry_date>?
+            GROUP BY e.entry_date ORDER BY e.entry_date""", (fid, entry_date))
+        for row in later:
+            available += row["delta"]
+            check_capacity(row["entry_date"])
 
 
 # ---------------------------------------------------------------- internals: customers and suppliers
