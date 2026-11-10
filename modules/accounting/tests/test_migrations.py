@@ -56,13 +56,13 @@ def test_a_new_database_gets_every_version_and_no_backup():
     out = a.init_db(conn)
     assert out == {"module": "accounting", "from_version": 0, "to_version": LATEST,
                    "applied": list(range(1, LATEST + 1)), "backup": None}
-    assert a.schema_version(conn) == LATEST == a.latest_version() == 6
+    assert a.schema_version(conn) == LATEST == a.latest_version() == 7
     assert {"acct_accounts", "acct_journal_entries", "acct_journal_lines", "acct_customers", "acct_suppliers",
             "acct_invoices", "acct_invoice_lines", "acct_invoice_payments", "acct_bills", "acct_bill_lines",
             "acct_bill_payments"} <= tables(conn)
     names = [tuple(r) for r in conn.execute("SELECT module, version, name FROM module_migrations ORDER BY version")]
     assert names == [("accounting", 1, "ledger"), ("accounting", 2, "sales_and_purchases"),
-                     ("accounting", 3, "document_entries"), ("accounting", 4, "fund_accounting"), ("accounting", 5, "fund_capital_accounts"), ("accounting", 6, "fund_constraint_controls")]
+                     ("accounting", 3, "document_entries"), ("accounting", 4, "fund_accounting"), ("accounting", 5, "fund_capital_accounts"), ("accounting", 6, "fund_constraint_controls"), ("accounting", 7, "local_control_administrators")]
     assert "acct_funds" in tables(conn)
     assert conn.execute("SELECT fund_id FROM acct_journal_lines LIMIT 0").fetchone() is None
     assert not [f for f in os.listdir(TMP.name) if f.startswith("new.db.") and f.endswith(".bak")]
@@ -84,7 +84,7 @@ def test_an_upgrade_backs_up_the_database_first_and_keeps_the_data():
         {"account_code": "1000", "debit_cents": 500_000}, {"account_code": "3000", "credit_cents": 500_000}])
     backups = Path(TMP.name) / "upgrade_backups"
     out = a.init_db(conn, backup_dir=str(backups))
-    assert out["from_version"] == 1 and out["applied"] == [2, 3, 4, 5, 6] and out["to_version"] == 6
+    assert out["from_version"] == 1 and out["applied"] == [2, 3, 4, 5, 6, 7] and out["to_version"] == 7
     assert out["backup"] and Path(out["backup"]).parent == backups and "accounting-v0001" in out["backup"]
     copy = sqlite3.connect(out["backup"])
     assert copy.execute("SELECT code FROM acct_accounts ORDER BY code").fetchall()[0] == ("1000",)
@@ -163,7 +163,7 @@ def test_migration_files_must_be_numbered_without_gaps_and_only_go_forward():
     a.init_db(conn)
     rejected(lambda: m.migrate(conn, "accounting", a.MIGRATIONS, target=1), "migrations only go forward",
              m.MigrationError)
-    rejected(lambda: m.migrate(conn, "accounting", a.MIGRATIONS, target=7), "no migration 7", m.MigrationError)
+    rejected(lambda: m.migrate(conn, "accounting", a.MIGRATIONS, target=8), "no migration 8", m.MigrationError)
     conn.execute("INSERT INTO module_migrations (module, version, name) VALUES ('accounting', ?, 'the_future')",
                  (LATEST + 1,))
     rejected(lambda: a.init_db(conn), "newer than this code", m.MigrationError)

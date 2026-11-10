@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local fund controls</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:0 20px;color:#172a3a;background:#f4f6f8}section{background:white;border:1px solid #ccd5dd;border-radius:10px;padding:22px;margin:18px 0}label{display:block;margin:12px 0}input,select,button{font:inherit;padding:9px;box-sizing:border-box}input{display:block;width:100%;margin-top:4px}button{cursor:pointer;margin:8px 8px 0 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}#status{min-height:24px}.notice{line-height:1.5;color:#475967}h1{font-size:28px}button.primary{background:#174b70;color:white;border:1px solid #174b70;border-radius:4px}</style></head>
+<body><h1>Local fund controls</h1><p class="notice">Development books only. These controls do not provide CRM business isolation or make the ordinary ledger endpoints production-ready. Installer-created administrators can review mappings and suspend or reinstate one check at a time.</p>
+<section id="login-panel"><h2>Administrator login</h2><form id="login"><label>Username<input name="username" autocomplete="username" required maxlength="160"></label><label>Password<input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="256"></label><button class="primary">Log in</button></form></section>
+<section id="controls" hidden><button id="logout">Log out</button><h2>Fund review</h2><label>Fund ID<input id="fund" type="number" min="1" step="1" required></label><button id="review">Load controls and audit</button><label>Reason for this change<input id="reason" maxlength="2000" required></label><label>Reviewed cash account IDs, comma separated<input id="accounts" placeholder="Example: 1, 2"></label><button id="map">Save one-time cash mapping</button><p class="notice">Cash mapping is immutable. Confirm every selected chart account before saving. Checks still enforce journal and donor restrictions.</p><label>Constraint<select id="constraint"><option value="cash">Cash</option><option value="capacity">Capacity</option></select></label><button id="suspend">Suspend check</button><button id="reinstate">Reinstate check</button><pre id="result">Choose a fund to review its current state.</pre></section>
+<p id="status" role="status"></p>
+<script>
+'use strict';
+let token='';
+const el=id=>document.getElementById(id);
+function status(text){el('status').textContent=text;}
+function signedIn(value){el('controls').hidden=!value;el('login-panel').hidden=value;}
+async function call(path,options={}){const headers={'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...options.headers};const response=await fetch('/accounting'+path,{...options,headers,cache:'no-store'});const body=await response.json();if(!response.ok){if(response.status===401){token='';signedIn(false);}throw Error(typeof body.detail==='string'?body.detail:'Request rejected. Check the inputs and your session.');}return body;}
+function fund(){const value=Number(el('fund').value);if(!Number.isSafeInteger(value)||value<1)throw Error('Enter a positive fund ID.');return value;}
+function reason(){const value=el('reason').value.trim();if(!value)throw Error('Enter a reason for the audit.');return value;}
+async function review(){const id=fund();const state=await call('/funds/'+id+'/controls');const audit=await call('/funds/'+id+'/controls/audit');el('result').textContent=JSON.stringify({controls:state,audit},null,2);}
+function action(fn){return async()=>{try{await fn();status('Done.');}catch(error){status(error.message);}};}
+el('login').onsubmit=async event=>{event.preventDefault();const form=event.target;try{const result=await call('/controls/login',{method:'POST',body:JSON.stringify({username:form.username.value,password:form.password.value})});token=result.token;form.password.value='';signedIn(true);status('Logged in. Session lasts up to one hour.');}catch(error){form.password.value='';status(error.message);}};
+el('logout').onclick=action(async()=>{await call('/controls/logout',{method:'POST'});token='';signedIn(false);el('result').textContent='';});
+el('review').onclick=action(review);
+async function change(path,body){if(!confirm('Save this reviewed change to local fund '+fund()+'?'))return;await call('/funds/'+fund()+'/controls/'+path,{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify(body)});await review();}
+el('map').onclick=action(async()=>{const ids=el('accounts').value.split(',').map(s=>Number(s.trim()));if(ids.some(id=>!Number.isSafeInteger(id)||id<1)||!ids.length)throw Error('Enter positive cash account IDs.');await change('cash-accounts',{account_ids:ids,reason:reason()});});
+el('suspend').onclick=action(()=>change(el('constraint').value,{enabled:false,reason:reason()}));
+el('reinstate').onclick=action(()=>change(el('constraint').value,{enabled:true,reason:reason()}));
+</script></body></html>

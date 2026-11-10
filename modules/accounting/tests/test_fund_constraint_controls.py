@@ -148,7 +148,7 @@ class ControlsTests(unittest.TestCase):
         self.assertEqual(a.fund(self.c,self.f,as_of='2026-12-31')['available_cents'],-2000)
         self.assertTrue(any(r['journal_entry_id']==entry['entry_id'] for r in self.audit()))
     def test_new_schema_keeps_existing_funds_unconfigured(self):
-        self.assertEqual(a.schema_version(self.c),6)
+        self.assertEqual(a.schema_version(self.c),7)
         a.verify_schema(self.c)
         self.assertEqual(a.fund(self.c,self.f,as_of='2026-12-31')['available_cents'],10000)
         self.assertEqual(self.audit(),[])
@@ -174,7 +174,7 @@ class ControlsTests(unittest.TestCase):
                 revenue=a.account_by_code(c,'4000')['account_id']
                 a.record_grant_receipt(c,'grant',f,'2026-01-01',10000,bank,revenue,'Old grant')
                 out=a.init_db(c)
-                self.assertEqual(out['applied'],[6]);self.assertTrue(Path(out['backup']).is_file())
+                self.assertEqual(out['applied'],[6, 7]);self.assertTrue(Path(out['backup']).is_file())
                 self.assertEqual(a.fund(c,f,as_of='2026-12-31')['available_cents'],10000)
                 self.assertFalse(a.fund_controls(c,f)['cash_enforced'])
                 self.assertEqual(a.fund_constraint_audit(c,f),[])
