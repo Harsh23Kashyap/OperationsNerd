@@ -595,3 +595,12 @@ localStorage; reload requires login. Logout revokes the presented session.
 Five failed logins lock an identity for five minutes. This local lockout is not a
 network-wide rate limiter and must not be treated as internet-facing protection.
 A viewer can read controls and audit but cannot change either.
+
+### Inspect or contain a local control identity without resetting its password
+
+The installer-only `manage_admin.py` command supports `status`, `revoke-sessions`
+and `disable` on an existing current-schema book. It never asks for or prints a
+password and does not add an HTTP route. See
+[`LOCAL_CONTROL_SESSION_MANAGEMENT.md`](../../documentation/LOCAL_CONTROL_SESSION_MANAGEMENT.md)
+for commands, rollback/recovery behavior and limits. Ordinary ledger routes and
+the production gate are unchanged; this is not CRM/business isolation.

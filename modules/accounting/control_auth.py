@@ -105,3 +105,49 @@ def logout(conn, token):
     if isinstance(token, str):
         conn.execute('DELETE FROM acct_control_sessions WHERE token_hash=?',
                      (hashlib.sha256(token.encode()).hexdigest(),))
+
+
+def identity_status(conn, username, now=None):
+    """Installer-only status; never exposes stored password or token hashes."""
+    username = _username(username)
+    now = int(time.time() if now is None else now)
+    row = conn.execute('''SELECT u.id,u.username,u.role,u.active,u.failed_attempts,u.locked_until,
+        (SELECT count(*) FROM acct_control_sessions s
+         WHERE s.user_id=u.id AND s.expires_at>?) AS active_sessions
+        FROM acct_control_users u WHERE u.username=?''', (now, username)).fetchone()
+    if row is None:
+        raise ValueError('Unknown local control identity')
+    result = dict(row)
+    result['active'] = bool(result['active'])
+    return result
+
+
+def _revoke_identity(conn, username, disable):
+    username = _username(username)
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        row = conn.execute('SELECT id FROM acct_control_users WHERE username=?', (username,)).fetchone()
+        if row is None:
+            raise ValueError('Unknown local control identity')
+        if disable:
+            conn.execute('UPDATE acct_control_users SET active=0 WHERE id=?', (row['id'],))
+        count = conn.execute('DELETE FROM acct_control_sessions WHERE user_id=?', (row['id'],)).rowcount
+        conn.execute('COMMIT')
+        return count
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute('ROLLBACK')
+        raise
+
+
+def revoke_sessions(conn, username):
+    """Installer-only: revoke current sessions, preserving credentials/lockout."""
+    return _revoke_identity(conn, username, disable=False)
+
+
+def disable_identity(conn, username):
+    """Installer-only: disable login and revoke sessions in one transaction.
+
+    Re-enable only through the existing provision/password-reset operation.
+    """
+    return _revoke_identity(conn, username, disable=True)
