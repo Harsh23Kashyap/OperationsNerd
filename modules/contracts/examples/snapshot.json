@@ -1,0 +1,37 @@
+{
+  "draft_version": "binding-preflight-1",
+  "account_id": "account-A",
+  "business_id": "business-A",
+  "revision": "r7",
+  "entities": {
+    "products": {
+      "account_id": "account-A",
+      "business_id": "business-A",
+      "archived": false,
+      "fields": {
+        "label": {
+          "type": "text",
+          "target": null,
+          "archived": false
+        }
+      }
+    },
+    "requests": {
+      "account_id": "account-A",
+      "business_id": "business-A",
+      "archived": false,
+      "fields": {
+        "units": {
+          "type": "integer",
+          "target": null,
+          "archived": false
+        },
+        "product_id": {
+          "type": "link",
+          "target": "products",
+          "archived": false
+        }
+      }
+    }
+  }
+}

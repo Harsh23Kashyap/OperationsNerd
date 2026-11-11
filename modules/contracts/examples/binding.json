@@ -1,0 +1,22 @@
+{
+  "draft_version": "binding-preflight-1",
+  "module": "fictional-stock",
+  "account_id": "account-A",
+  "business_id": "business-A",
+  "revision": "r7",
+  "entities": {
+    "item": {
+      "entity": "products",
+      "fields": {
+        "name": "label"
+      }
+    },
+    "order": {
+      "entity": "requests",
+      "fields": {
+        "quantity": "units",
+        "item": "product_id"
+      }
+    }
+  }
+}
