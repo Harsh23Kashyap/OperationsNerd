@@ -98,7 +98,6 @@ def preflight(requirements, snapshot, binding, *, account_id, business_id):
     if binding['module'] != requirements['module']: issue('module_mismatch')
     if binding['revision'] != snapshot['revision']: issue('stale_binding')
     for role in sorted(set(mappings) - set(reqs)): issue('unexpected_role',role)
-    selected = {}
     for role in sorted(reqs):
         mapping = mappings.get(role)
         if mapping is None:
@@ -106,7 +105,6 @@ def preflight(requirements, snapshot, binding, *, account_id, business_id):
         entity = schemas.get(mapping['entity'])
         if entity is None:
             issue('missing_entity',role); continue
-        selected[role] = entity
         if entity['account_id'] != account_id or entity['business_id'] != business_id:
             issue('entity_scope_mismatch',role)
         if entity['archived']: issue('archived_entity',role)

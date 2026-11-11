@@ -48,7 +48,12 @@ It checks revision equality, every required entity/field, exact field types,
 archived flags and link targets. Extra role mappings and aliases (two roles
 mapped to the same entity, or two field roles to one field) are refused in this
 draft. Extra schema entities/fields are allowed and ignored if not selected.
-Missing mappings are reported, never filled by similar names. Multiple semantic
+Partial nonempty mappings report missing roles/fields as issues, never filled
+by similar names. Empty `entities` maps (requirements, snapshot or binding) and
+empty per-entity `fields` maps are structurally invalid: they raise
+`ContractError` in the Python API and exit 2 in the CLI, rather than producing
+missing-role issues or a compatibility report. Empty input leaves any existing
+report unchanged. Do not confuse an old report with a successful current run. Multiple semantic
 issues are collected in deterministic order. Structurally malformed inputs stop
 before any compatibility claim is written.
 
@@ -83,3 +88,19 @@ stock checks, accounting postings or company-isolation guarantees. Passing type
 checks cannot prove business meaning or that a module's workflow is correct.
 Real adapters, agreed I/O, business mapping and the revised integration
 architecture remain open decisions. Existing production gates remain intact.
+
+## Test integration
+
+`python scripts/run_tests.py` now includes the standalone contract test scripts
+under `modules/contracts/tests` as well as the core scripts. Contract scripts
+run from the repository root; core scripts retain their application working
+directory. Filename filters apply to both groups. The existing GitHub Actions
+job invokes this runner, so it includes the contract tests without an extra
+job or dependency. The live-credit `test_llm_smoke.py` remains excluded.
+
+Review follow-up validation: 12 new runner-discovery/working-directory/failure
+propagation cases (old runner: 5 fail/7 pass) and 6 explicit empty-map API cases
+pass. The existing 39 contract cases still pass. The updated full runner passes
+25/25 scripts: 23 core scripts including the runner regression, plus 2 contract
+scripts. No live-model smoke test is enabled. This is local qualification, not
+a claim that the hosted CI job has already completed.

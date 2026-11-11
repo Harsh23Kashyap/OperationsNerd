@@ -1,7 +1,8 @@
-"""Run every test script under operations_nerd/tests and report a summary.
+"""Run core and module-contract test scripts and report a summary.
 
 The tests are plain scripts (no pytest). Each one is run in its own process
 from the operations_nerd folder, the same way CONTRIBUTING.md describes.
+Standalone module-contract tests run from the repository root.
 test_llm_smoke.py is skipped because it calls a real model and uses credits.
 
     python scripts/run_tests.py            # run all
@@ -23,6 +24,7 @@ TIMEOUT_SECONDS = 300
 
 def select(filters):
     files = sorted((APP_DIR / "tests").glob("test_*.py"))
+    files += sorted((ROOT / "modules" / "contracts" / "tests").glob("test_*.py"))
     files = [f for f in files if f.name not in SKIPPED]
     if filters:
         files = [f for f in files if any(part in f.name for part in filters)]
@@ -34,7 +36,7 @@ def run_one(path):
     try:
         done = subprocess.run(
             [sys.executable, str(path)],
-            cwd=APP_DIR,
+            cwd=APP_DIR if path.is_relative_to(APP_DIR) else ROOT,
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
