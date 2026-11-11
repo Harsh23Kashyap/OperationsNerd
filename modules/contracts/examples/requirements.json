@@ -1,0 +1,26 @@
+{
+  "draft_version": "binding-preflight-1",
+  "module": "fictional-stock",
+  "entities": {
+    "item": {
+      "fields": {
+        "name": {
+          "type": "text",
+          "target": null
+        }
+      }
+    },
+    "order": {
+      "fields": {
+        "quantity": {
+          "type": "integer",
+          "target": null
+        },
+        "item": {
+          "type": "link",
+          "target": "item"
+        }
+      }
+    }
+  }
+}
