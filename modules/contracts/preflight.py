@@ -61,10 +61,10 @@ def preflight(requirements, snapshot, binding, *, account_id, business_id):
         _obj(req, ('fields',), 'requirement entity')
         for field_role, field in _map(req['fields']).items():
             _obj(field, ('type','target'), 'requirement field')
-            if field['type'] not in TYPES:
+            if not isinstance(field['type'], str) or field['type'] not in TYPES:
                 raise ContractError('unknown required field type')
             if field['type'] == 'link':
-                if field['target'] not in reqs:
+                if not isinstance(field['target'], str) or field['target'] not in reqs:
                     raise ContractError('link target must name a required role')
             elif field['target'] is not None:
                 raise ContractError('only link fields have targets')
@@ -75,7 +75,7 @@ def preflight(requirements, snapshot, binding, *, account_id, business_id):
             raise ContractError('archived must be boolean')
         for field_name, field in _map(schema['fields']).items():
             _obj(field, ('type','target','archived'), 'schema field')
-            if field['type'] not in TYPES or type(field['archived']) is not bool:
+            if not isinstance(field['type'], str) or field['type'] not in TYPES or type(field['archived']) is not bool:
                 raise ContractError('invalid schema field')
             if field['type'] == 'link':
                 _text(field['target'])
